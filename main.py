@@ -36,16 +36,26 @@ def set_var():
     var_key = datastore_client.key("variable", name)
     var_entity = datastore.Entity(key=var_key)
 
-    action_key = datastore_client.key("action", name)
+    action_key = datastore_client.key("action")
     action_entity = datastore.Entity(key=action_key)
 
-    prev_action = datastore_client.get(action_key)
-    print('prev action: ', prev_action)
+    query = datastore_client.query(kind="action")
+    # query.add_filter('var_name','=', name)
+    query.order = ['updated']
+    print('actions by name: ', list(query.fetch()))
+    actions = list(query.fetch())   
+    filtered_by_name = [p for p in actions if p['var_name'] == name]
+    # print('filtered by name: ', filtered_by_name)
+    # prev_action = datastore_client.get(action_key)
     prev_value = None
-    if prev_action != None:
+    if len(actions) != 0:
+        prev_action = list(query.fetch()).pop()
+        print('prev action: ', prev_action)
         prev_value = prev_action['value']
+        print('prev value: ', prev_value)
     
     update_action_and_var(var_entity, action_entity, value, prev_value, name)
+    print('var: ', var_entity)
 
     output = '{var_name}={var_value}'.format(var_name = name, var_value = value)
 
