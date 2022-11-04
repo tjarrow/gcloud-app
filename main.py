@@ -2,13 +2,27 @@ from google.cloud import datastore
 
 from flask import Flask, render_template, request
 
-from markupsafe import escape
-
 import datetime
 
 app = Flask(__name__)
 
 datastore_client = datastore.Client()
+
+def update_action_and_var(var_entity, action_entity, value, prev_value, name):
+    var_entity.update({
+        'value': value,
+        'prev_value': prev_value,
+        'updated': datetime.datetime.now(tz=datetime.timezone.utc)
+    })
+
+    action_entity.update({
+        'value': value,
+        'var_name': name,
+        'action_name': 'set',
+        'updated': datetime.datetime.now(tz=datetime.timezone.utc)
+    })
+    datastore_client.put(var_entity)
+    datastore_client.put(action_entity)
 
 @app.route('/')
 def start():
@@ -22,30 +36,16 @@ def set_var():
     var_key = datastore_client.key("variable", name)
     var_entity = datastore.Entity(key=var_key)
 
-    last_action_key = datastore_client.key("last_action", name)
-    last_action_entity = datastore.Entity(key=last_action_key)
+    action_key = datastore_client.key("action", name)
+    action_entity = datastore.Entity(key=action_key)
 
-    prev_action = datastore_client.get(last_action_key)
-    print('prev_action: ', prev_action)
-    if prev_action == None:
-        prev_value = None
-    else:
-        prev_value = prev_action['prev_value']
+    prev_action = datastore_client.get(action_key)
+    print('prev action: ', prev_action)
+    prev_value = None
+    if prev_action != None:
+        prev_value = prev_action['value']
     
-    var_entity.update({
-        'value': value,
-        'prev_value': prev_value,
-        'updated': datetime.datetime.now(tz=datetime.timezone.utc)
-    })
-
-    last_action_entity.update({
-        'prev_value': value,
-        'var_name': name,
-        'action_name': 'set',
-        'updated': datetime.datetime.now(tz=datetime.timezone.utc)
-    })
-    datastore_client.put(var_entity)
-    datastore_client.put(last_action_entity)
+    update_action_and_var(var_entity, action_entity, value, prev_value, name)
 
     output = '{var_name}={var_value}'.format(var_name = name, var_value = value)
 
@@ -53,39 +53,38 @@ def set_var():
 
 @app.route('/get')
 def get_var():
-    name=request.args.get('name')
-    complete_key = datastore_client.key("variable", name)
+    name = request.args.get('name')
+    var_key = datastore_client.key("variable", name)
 
-    task = datastore_client.get(complete_key)
-    if task == None:
+    var = datastore_client.get(var_key)
+    if var == None:
         var_value = None
     else:
-        var_value = task['value']    
+        var_value = var['value']    
 
-    output = '{var_name}={var_value}'.format(var_name = name, var_value = var_value)
+    output = '{var_value}'.format(var_value = var_value)
 
     return render_template('index.html', output=output)
 
 @app.route('/unset')
 def unset_var():
     name=request.args.get('name')
-    complete_key = datastore_client.key("variable", name)
-    last_action_key = datastore_client.key("last_action", name)
-    last_action_entity = datastore.Entity(key=last_action_key)
-
-    task = datastore_client.get(complete_key)
-    print('task: ', task)
-    if task != None:
-        datastore_client.delete(complete_key)
+    var_key = datastore_client.key("variable", name)
+    action_key = datastore_client.key("action", name)
+    action_entity = datastore.Entity(key=action_key)
+    var = datastore_client.get(var_key)
+    print('var: ', var)
+    if var != None:
+        datastore_client.delete(var_key)
     
-        last_action_entity.update({
-            'prev_value': task[value],
+        action_entity.update({
+            'value': var['value'],
             'var_name': name,
             'action_name': 'set',
             'updated': datetime.datetime.now(tz=datetime.timezone.utc)
         })
-        print('last action entity: ', last_action_entity)
-        datastore_client.put(last_action_entity)
+
+        datastore_client.put(action_entity)
         output = '{var_name}={var_value}'.format(var_name = name, var_value = None)
 
     return render_template('index.html', output=output)
@@ -101,78 +100,87 @@ def get_num_equal_to():
     
 @app.route('/undo')
 def undo_recent_command():
-    query = datastore_client.query(kind="last_action")
+    query = datastore_client.query(kind="action")
     query.order = ['updated']
-    print('last actions: ', list(query.fetch()))
-    last_action = list(query.fetch()).pop()
+    # action = list(query.fetch()).pop()
+    actions = list(query.fetch())
+    print('all actions: ', actions)
+    # if action['action_name'] == 'undo':
+    #     return render_template('index.html', 'NO COMMANDS')
 
-    if last_action['action_name'] == 'undo':
-        return render_template('index.html', 'NO COMMANDS')
-
-    var_name = last_action['var_name']
+    var_name = action['var_name']
 
     var_key = datastore_client.key("variable", var_name)
     var_entity = datastore.Entity(key=var_key)
-    last_action_key = datastore_client.key("last_action", var_name)
-    last_action_entity = datastore.Entity(key=last_action_key)
+    action_key = datastore_client.key("action", var_name)
+    action_entity = datastore.Entity(key=action_key)
 
     var = datastore_client.get(var_key)
+    print('var: ', var)
+
+    if var['prev_value'] == None:
+        output = 'NO COMMANDS'
+        return render_template('index.html', output=output)
+    # value = None
     if var != None:
-        prev_value = var['prev_value']
+        value = var['prev_value']
     else:
-        prev_value = last_action['prev_value']
+        value = action['value']
+        
 
-    var_entity.update({
-        'value': prev_value,
-        'prev_value': None,
-        'updated': datetime.datetime.now(tz=datetime.timezone.utc)
-    })
+    update_action_and_var(var_entity, action_entity, value, None, var_name)
+    # var_entity.update({
+    #     'value': prev_value,
+    #     'prev_value': None,
+    #     'updated': datetime.datetime.now(tz=datetime.timezone.utc)
+    # })
 
-    last_action_entity.update({
-        'prev_value': prev_value,
-        'var_name': var_name,
-        'action_name': 'undo',
-        'updated': datetime.datetime.now(tz=datetime.timezone.utc)
-    })
+    # action_entity.update({
+    #     'prev_value': prev_value,
+    #     'var_name': var_name,
+    #     'action_name': 'undo',
+    #     'updated': datetime.datetime.now(tz=datetime.timezone.utc)
+    # })
 
-    datastore_client.put(var_entity)
-    datastore_client.put(last_action_entity)
+    # datastore_client.put(var_entity)
+    # datastore_client.put(action_entity)
 
-    output = '{var_name}={var_value}'.format(var_name = var_name, var_value = prev_value)
+    output = '{var_name}={var_value}'.format(var_name = var_name, var_value = value)
 
     return render_template('index.html', output=output)
 
 @app.route('/redo')
 def redo_command():
-    query = datastore_client.query(kind="last_action")
+    query = datastore_client.query(kind="action")
     query.add_filter("action_name", "=", "set")
     # print('last actions: ', list(query.fetch()))
     last_undone_action = list(query.fetch())[0]
     print('last undone action: ', last_undone_action)
 
     var_name = last_undone_action['var_name']
-    prev_value = last_undone_action['prev_value']
+    prev_value = last_undone_action['value']
 
     var_key = datastore_client.key("variable", var_name)
     var_entity = datastore.Entity(key=var_key)
-    last_action_key = datastore_client.key("last_action", var_name)
-    last_action_entity = datastore.Entity(key=last_action_key)
+    action_key = datastore_client.key("action", var_name)
+    action_entity = datastore.Entity(key=action_key)
 
-    var_entity.update({
-        'value': prev_value,
-        'prev_value': prev_value,
-        'updated': datetime.datetime.now(tz=datetime.timezone.utc)
-    })
+    update_action_and_var(var_entity, action_entity, prev_value, prev_value, var_name)
+    # var_entity.update({
+    #     'value': prev_value,
+    #     'prev_value': prev_value,
+    #     'updated': datetime.datetime.now(tz=datetime.timezone.utc)
+    # })
 
-    last_action_entity.update({
-        'prev_value': prev_value,
-        'var_name': var_name,
-        'action_name': 'redo',
-        'updated': datetime.datetime.now(tz=datetime.timezone.utc)
-    })
+    # action_entity.update({
+    #     'value': prev_value,
+    #     'var_name': var_name,
+    #     'action_name': 'redo',
+    #     'updated': datetime.datetime.now(tz=datetime.timezone.utc)
+    # })
 
-    datastore_client.put(var_entity)
-    datastore_client.put(last_action_entity)
+    # datastore_client.put(var_entity)
+    # datastore_client.put(action_entity)
 
     output = '{var_name}={var_value}'.format(var_name = var_name, var_value = prev_value)
 
@@ -180,11 +188,17 @@ def redo_command():
 
 @app.route('/end')    
 def end_session():
-    query = datastore_client.query()
-    entities = list(query.fetch())
-    print('items: ', entities)
-    for entity in entities:
-        datastore_client.delete(entity.key)
+    var_query = datastore_client.query(kind='variable')
+    action_query = datastore_client.query(kind='action')
+
+    var_entities = list(var_query.fetch())
+    action_entities = list(action_query.fetch())
+
+    for var in var_entities:
+        datastore_client.delete(var.key)
+
+    for action in action_entities:
+        datastore_client.delete(action.key)
 
     output='CLEANED'
     return render_template('index.html', output=output)
