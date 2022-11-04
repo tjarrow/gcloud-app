@@ -8,7 +8,13 @@ app = Flask(__name__)
 
 datastore_client = datastore.Client()
 
-def update_action_and_var(var_entity, action_entity, value, prev_value, redo_value, name, action_name):
+def update_action_and_var(value, prev_value, redo_value, name, action_name):
+    var_key = datastore_client.key("variable", name)
+    var_entity = datastore.Entity(key=var_key)
+
+    action_key = datastore_client.key("action")
+    action_entity = datastore.Entity(key=action_key)
+
     var_entity.update({
         'name': name,
         'value': value,
@@ -32,34 +38,21 @@ def start():
 
 @app.route('/set')
 def set_var():
-    name=request.args.get('name')
-    value=request.args.get('value')
-    
-    var_key = datastore_client.key("variable", name)
-    var_entity = datastore.Entity(key=var_key)
-
-    action_key = datastore_client.key("action")
-    action_entity = datastore.Entity(key=action_key)
-
+    name = request.args.get('name')
+    value = request.args.get('value')
     query = datastore_client.query(kind="action")
-    # query.add_filter('var_name','=', name)
     query.order = ['updated']
     actions = list(query.fetch())   
-    print('all actions : ', list(query.fetch()))
 
     filtered_by_name = [action for action in actions if action['var_name'] == name]
-    # prev_action = datastore_client.get(action_key)
     prev_value = None
     if len(filtered_by_name) != 0:
         prev_action = filtered_by_name.pop()
-        print('prev action: ', prev_action)
         prev_value = prev_action['value']
-        print('prev value: ', prev_value)
     
-    update_action_and_var(var_entity, action_entity, value, prev_value, None, name, 'set')
-    print('var: ', var_entity)
+    update_action_and_var(value, prev_value, None, name, 'set')
 
-    output = '{var_name}={var_value}'.format(var_name = name, var_value = value)
+    output = '{var_name} = {var_value}'.format(var_name = name, var_value = value)
 
     return render_template('index.html', output=output)
 
@@ -85,7 +78,6 @@ def unset_var():
     action_key = datastore_client.key("action")
     action_entity = datastore.Entity(key=action_key)
     var = datastore_client.get(var_key)
-    print('var: ', var)
     if var != None:
         datastore_client.delete(var_key)
     
@@ -97,7 +89,7 @@ def unset_var():
         })
 
         datastore_client.put(action_entity)
-        output = '{var_name}={var_value}'.format(var_name = name, var_value = None)
+        output = '{var_name} = {var_value}'.format(var_name = name, var_value = None)
     else:
         output = 'The variable was not set'    
 
@@ -116,36 +108,27 @@ def get_num_equal_to():
 def undo_recent_command():
     query = datastore_client.query(kind="action")
     query.order = ['updated']
-    action_key = datastore_client.key("action")
     actions = list(query.fetch())
     commands_to_undo = [action for action in actions if action['action_name'] == 'set']
     if len(commands_to_undo) == 0:
         return render_template('index.html', output='NO COMMANDS')
     action_to_undo = commands_to_undo.pop()
-    print('action to undo: ', action_to_undo)
 
     datastore_client.delete(action_to_undo.key)
     
     var_name = action_to_undo['var_name']
-    
     var_key = datastore_client.key("variable", var_name)
-    var_entity = datastore.Entity(key=var_key)
-    action_key = datastore_client.key("action")
-    action_entity = datastore.Entity(key=action_key)
-
     var = datastore_client.get(var_key)
-    print('var: ', var)
     set_actions_by_name = [el for el in commands_to_undo if el['var_name'] == var['name']]
-    print('actions by name: ', set_actions_by_name)
     value = var['prev_value']
     value_to_recover = var['value']
     if len(set_actions_by_name) > 1:
         prev_value = set_actions_by_name[-2]['value']
     else:
         prev_value = None    
-    update_action_and_var(var_entity, action_entity, value, prev_value, value_to_recover, var_name, 'undo')
+    update_action_and_var(value, prev_value, value_to_recover, var_name, 'undo')
     
-    output = '{var_name}={var_value}'.format(var_name = var_name, var_value = value)
+    output = '{var_name} = {var_value}'.format(var_name = var_name, var_value = value)
 
     return render_template('index.html', output=output)
 
@@ -156,32 +139,20 @@ def redo_command():
     actions = list(query.fetch())
 
     commands_to_redo = [action for action in actions if action['action_name'] == 'undo']
-    print('commands_to_redo: ', commands_to_redo)
 
     action_to_redo = commands_to_redo.pop()
-    print('action to redo: ', action_to_redo)
 
     prev_value = action_to_redo['value']
-    print('prev_value: ', prev_value)
     datastore_client.delete(action_to_redo.key)
     
     var_name = action_to_redo['var_name']
-
     var_key = datastore_client.key("variable", var_name)
-    var_entity = datastore.Entity(key=var_key)
-    action_key = datastore_client.key("action")
-    action_entity = datastore.Entity(key=action_key)
-
     var = datastore_client.get(var_key)
-    print('var: ', var)
-    # undo_actions_by_name = [el for el in commands_to_redo if el['var_name'] == var['name']]
-    # print('actions by name: ', undo_actions_by_name)
     
     value = action_to_redo['redo_value']
-    print('value: ', value)
 
-    update_action_and_var(var_entity, action_entity, value, prev_value, None, var_name, 'set')
-    output = '{var_name}={var_value}'.format(var_name = var['name'], var_value = value)
+    update_action_and_var(value, prev_value, None, var_name, 'set')
+    output = '{var_name} = {var_value}'.format(var_name = var['name'], var_value = value)
 
     return render_template('index.html', output=output)
 
